@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "precursor_ppm": 10.0,
+  "fragment_ppm": 10.0,
+  "fragment_da": 0.002,
+  "intensity_floor": 0.001,
+  "max_peaks": 128,
+  "max_candidates": 10000,
+  "max_search_results": 250000,
+  "seed": 42,
+  "element_limits": {
+    "C": 155, "H": 268, "N": 35, "O": 65, "P": 4,
+    "S": 8, "F": 44, "Cl": 8, "Br": 8, "I": 8
+  }
+}
