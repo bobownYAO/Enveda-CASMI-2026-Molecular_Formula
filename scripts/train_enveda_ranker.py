@@ -92,14 +92,14 @@ def prepare_samples():
     return selection
 
 
-def cache_all():
+def cache_all(max_workers=4):
     tasks=[]
     for split in ("train","validation","test"):
         ident=identity(DATA,split)
         target=DATA/"feature_cache"/digest(ident)[:20]
         if not (target/"manifest.json").exists():
             tasks.extend((p,split) for p in sorted((DATA/"shards").glob(f"{split}-*")))
-    with ProcessPoolExecutor(max_workers=4) as pool:
+    with ProcessPoolExecutor(max_workers=max_workers) as pool:
         futures={pool.submit(build_cache,str(path),split):(path,split) for path,split in tasks}
         for future in as_completed(futures):
             path,split=futures[future]

@@ -17,57 +17,174 @@ py -3.11 -m venv .venv
 
 Linux 使用 `.venv/bin/python` 与 `.venv/bin/casmi`。需要离线安装时，应事先为目标平台准备依赖 wheel；运行时不会下载数据或模型。
 
-```python
-from casmi.formula import FormulaConfig, FormulaPredictor
+## 面向模块调用者
 
-predictor = FormulaPredictor.baseline()
-result = predictor.predict(
-    spectra=[{
-        "precursor_mz": 181.07066456,
+如果你的目标是把 CASMI 接入另一个 Python 程序，推荐使用项目根目录的
+[`formula_adapter.py`](formula_adapter.py)。它是一个独立的本地 Python 模块入口，
+不是 HTTP 服务，也不会自动启动网络端口；调用方只需要准备模型目录并导入
+`FormulaAdapter`。训练、候选枚举和谱图特征细节由底层 `casmi` 包处理。
+
+### 部署前提与模型选择
+
+Adapter 不会在推理时训练模型。模型权重不打包进 wheel，也不在 Git 的 `artifacts/`
+目录中；从远程仓库重新拉取代码后，需要另外复制模型文件，或通过绝对路径提供模型。
+每个可加载模型目录必须同时包含：
+
+```text
+model.txt       # LightGBM 已训练权重
+metadata.json   # 特征名称、化学配置、配置版本和模型版本
+```
+
+当前预设及其默认路径如下：
+
+| `lightgbm_model` | 模型目录 | 用途 |
+|---|---|---|
+| `"multi"` | `artifacts/formula/multisource-ranker-v1` | 多来源训练模型，Adapter 默认值 |
+| `"enveda-only"` | `artifacts/formula/enveda-ranker-v1` | Enveda/timsTOF 模型 |
+| 自定义字符串或 `Path` | 模型目录或其中的 `model.txt` | 部署调用方提供的模型 |
+
+自定义模型路径必须指向同时拥有 `model.txt` 和 `metadata.json` 的目录；不能只提供
+裸 LightGBM Booster。加载时会校验模型版本、特征名称、特征数量和公式配置，
+不兼容会直接抛出异常，不会静默回退到其他模型。
+
+### 配置优先级
+
+日常部署可以只修改 `formula_adapter.py` 顶部的 `CONFIG`：
+
+```python
+CONFIG = {
+    "lightgbm_model": "multi",
+    "top_k": 25,
+    "workers": 1,
+}
+```
+
+更细粒度的调用参数优先级如下：
+
+1. `FormulaAdapter(...)` 的参数覆盖 `CONFIG`；
+2. `predict(..., top_k=...)` 或 `predict_parquet(..., top_k=..., workers=...)` 覆盖实例默认值；
+3. 候选枚举、谱图预处理和元素边界以模型 `metadata.json` 中保存的配置为准，
+   Adapter 参数不会偷偷改变训练时的化学规则。
+
+同一个 `FormulaAdapter` 实例会只加载一次模型，适合服务进程或循环调用；
+`predict_formula(...)` 是一次性快捷入口，每次调用都会重新加载模型。
+
+### 单分子调用
+
+```python
+from formula_adapter import FormulaAdapter
+
+adapter = FormulaAdapter()
+result = adapter.predict(
+    [{
+        "precursor_mz": 181.0706646,
         "adduct": "[M+H]+",
-        "ms2_mzs": [163.06009988, 145.04953520],
+        "ms2_mzs": [163.0601, 145.0495],
         "ms2_normalized_intensities": [1.0, 0.4],
     }],
     molecule_id="example",
-    top_k=25,
+    top_k=10,
 )
-print(result.to_json())
-for candidate in result.candidates:
-    print(candidate.rank, candidate.formula, candidate.score)
 
-# 指定自己的元素范围或质量容差。
-predictor = FormulaPredictor.baseline(FormulaConfig.load("configs/formula.json"))
-# 加载已训练模型。不存在或配置/特征版本不兼容时明确报错。
-# predictor = FormulaPredictor.load("artifacts/formula/enveda-ranker-v1")
-# results = predictor.predict_parquet("test.parquet", top_k=25)
+if result["status"] in {"ok", "truncated"}:
+    for candidate in result["candidates"]:
+        print(candidate["rank"], candidate["formula"], candidate["score"])
+else:
+    print(result["status"], result["warnings"])
+
+# 查看实际加载的模型、树数、LightGBM 参数和公式配置。
+print(adapter.model_info)
 ```
 
-本地已提供 Enveda/timsTOF 模型 `artifacts/formula/enveda-ranker-v1`，可直接加载。
+### 输入与输出协议
+
+每张谱必须提供以下字段：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `precursor_mz` | 正浮点数 | 前体 m/z |
+| `adduct` | 字符串 | 例如 `[M+H]+` 或 `[M-H]-` |
+| `ms2_mzs` | 数组 | MS/MS 峰的 m/z |
+| `ms2_normalized_intensities` | 等长数组 | 非负峰强度 |
+
+可选字段包括 `spectrum_id`、`molecule_id`、`ionization_mode`、
+`collision_energy_ev`、`instrument_type` 和 `base_peak_intensity`。
+Adapter 不需要 `molecular_formula`、SMILES 或 `precursor_error_ppm` 等监督标签；
+同一次 `predict` 调用中的谱必须属于同一个分子。
+
+返回值是可直接 `json.dumps` 的字典，主要字段为：
+
+| 字段 | 说明 |
+|---|---|
+| `status` | 推理状态 |
+| `candidates` | 按 `rank` 排序的分子式候选 |
+| `warnings` | 证据不足、质量不一致或候选截断提示 |
+| `model_version` / `config_version` | 实际使用的模型和配置版本 |
+| `diagnostics` | 候选数量、使用谱数和耗时 |
+
+候选项包含 `rank`、`formula`、`exact_mass`、`score`、`mass_errors_ppm` 和
+`supporting_spectra`。`score` 是排序分数，不是概率，也不能直接比较不同分子或不同模型。
+
+调用方应按 `status` 处理结果：
+
+| 状态 | 含义 |
+|---|---|
+| `ok` | 候选已生成并完成排序 |
+| `truncated` | 候选超过保留上限，结果是已截断的完整排序前缀 |
+| `no_candidates` | 搜索完成但没有候选 |
+| `invalid_input` | 输入字段、数值或数组不合法 |
+| `unsupported_input` | 加合物等输入不在支持范围 |
+| `resource_limit` | 搜索触发资源上限，不能当作完整候选结果 |
+
+模型文件缺失、不兼容以及非法 `top_k`/`workers` 属于调用配置错误，会抛出异常，
+不转换成上述预测状态。
+
+### Parquet 批量调用
+
+```python
+from formula_adapter import FormulaAdapter
+
+adapter = FormulaAdapter(workers=1)
+results = adapter.predict_parquet(
+    "test.parquet",
+    output_path="predictions.jsonl",
+    top_k=25,
+    workers=4,
+)
+```
+
+Parquet 必须包含 `molecule_id`；Adapter 会按该列分组，并为每个分子返回一条结果。
+`output_path` 已存在时不会覆盖。批量入口会把输入表、分组和结果载入内存，适合当前规模的
+文件；超大数据请由调用方按分子分组后循环调用 `predict`。Windows 使用 `workers > 1`
+时，调用代码必须放在 `if __name__ == "__main__":` 保护块内。
+
+如果需要直接访问候选特征、基线排序或训练/评估 API，再使用底层
+`casmi.formula.FormulaPredictor`；一般业务调用不需要直接调用 `candidates`、`features`
+或训练脚本。
+
+本地工作区若已提供 Enveda/timsTOF 模型 `artifacts/formula/enveda-ranker-v1`，可直接加载；
+该目录及其他训练产物不属于代码仓库的一部分。
+
+### 当前模型与效果边界
+
 使用 3,000 个结构训练、500 个结构验证；新的 500 个独立留出结构 Top-1 为 83.8%、
 Top-5 为 98.0%、MRR@25 为 0.8977。训练时未见分子式的 284 个分子 Top-1 为 76.4%。
 这是 Enveda 来源的首轮训练，尚未全量拟合，也未验证天然产物或其他仪器的同等效果。
-46 项回归测试通过。训练协议、同候选基线对照和使用限制见
-[Enveda 训练报告](artifacts/reports/enveda-ranker-v1/report.md)。
+当前代码的 49 项回归测试已覆盖 Adapter 入口。训练协议、同候选基线对照和使用限制见
+[`docs/validation.md`](docs/validation.md)；详细报告属于本地产物，可由
+`scripts/train_enveda_ranker.py` 和 `scripts/report_enveda_ranker.py` 重新生成。
 后续已比较原模型与 7 组新参数：验证集选中的 63 叶模型在另一批 500 个新留出分子上
 未优于原模型（Top-1 84.2% 对 85.0%），因此仍保留 `enveda-ranker-v1` 作为当前推荐版本。
-完整对照见[参数实验报告](artifacts/reports/enveda-tuning-v1/report.md)。
+完整参数对照可由 `scripts/tune_enveda_ranker.py` 和
+`scripts/report_enveda_tuning.py` 重新生成，默认输出到
+`artifacts/reports/enveda-tuning-v1/`。
 扩展到另外 10 个数据库来源后，冻结模型的平均 1/k 约为 0.24–0.73，明显低于
 Enveda 内部约 0.90 的结果；部分高质量分子还会触发候选搜索资源上限。
-来源分层、GNPS 强度门槛对照和范围限制见
-[跨数据库报告](artifacts/reports/external-sources-v1/report.md)。
+来源分层、GNPS 强度门槛对照和范围限制可由
+`scripts/evaluate_external_sources.py`、`scripts/evaluate_gnps_intensity_ablation.py`
+和 `scripts/report_external_sources.py` 重新生成。
 之前的 `artifacts/formula/pilot-model` 及其 32 分子试跑报告 `docs/validation.md` 保留作历史记录；
 已有公开 test 预测文件来自此前模型，并未由本轮模型覆盖。
-
-必填谱字段是上例的四项。可选字段为 `spectrum_id`、`molecule_id`、`ionization_mode`、
-`collision_energy_ev`（列表）、`instrument_type`、`base_peak_intensity`。
-离子模式不提供时从加合物推导；提供时必须一致。SMILES、分子式和标签质量误差不会进入推理特征。
-多谱输入不能混入不同 `molecule_id`；精确重复记录不会重复增加证据。
-
-文件入口按 `molecule_id` 分组。`predict_parquet(..., workers=4)` 可并行处理；
-Windows 脚本需在 `if __name__ == "__main__":` 下启动多进程。默认单进程可直接用于 Notebook。
-需要逐条消费结果时使用 `iter_predict_parquet()`。
-文件预测入口会将输入文件及分组载入内存，适用于当前约 5 MB 的 test；
-超大推理数据应由调用方分组后逐个调用 `predict()`。训练数据准备使用独立的分批读取流程。
 
 ## 命令行流程
 
@@ -150,6 +267,20 @@ casmi formula predict --input enveda-CASMI26-molecule-id-mass-spectra/test.parqu
 公开 test 是流程验收样例；效果评估使用结构隔离的留出数据。分子式 MRR 不等于竞赛 SMILES MRR。
 
 ## 文件与验证
+
+多来源分布加权实验的详细报告在本地生成的
+`artifacts/reports/multisource-v1/report.md` 中；该产物不随 Git 上传。
+使用 11 个来源、3,000 个训练抽样组（2,842 个可拟合）、550 个验证组和 1,500 个测试组，
+按可用训练库的来源—结构数量加权。固定候选集上，原 Enveda 模型与多来源模型的
+加权平均 `1/k` 分别为 0.771837、0.847298；加权 Top-1 为 69.48%、79.56%。
+该总分代表训练库分布，不代表竞赛自然产物分布。原模型保留，新模型可单独加载：
+
+```python
+predictor = FormulaPredictor.load("artifacts/formula/multisource-ranker-v1")
+```
+
+复现脚本为 `scripts/train_multisource_ranker.py` 和 `scripts/report_multisource_ranker.py`；
+采样名单、来源权重、结构隔离验证、逐组得分和配对置信区间均随实验保存。
 
 主要代码位于 `src/casmi/formula/`：`chemistry`/`candidates` 负责化学和枚举，
 `spectra`/`features` 负责谱图与特征，`predictor` 是公共入口，`data`/`training` 负责数据与评估。

@@ -15,9 +15,13 @@ dev = ["pytest>=8"]
 [project.scripts]
 casmi = "casmi.cli:main"
 
+[tool.setuptools]
+py-modules = ["formula_adapter"]
+package-dir = {"" = ".", "casmi" = "src/casmi"}
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 testpaths = ["tests"]
