@@ -53,13 +53,15 @@ metadata.json   # 特征名称、化学配置、配置版本和模型版本
 原 `artifacts/` 目录仍保留本地实验产物并继续忽略；发布副本的模型权重与原权重一致，
 元数据中的本机绝对溯源路径已转为仓库相对路径，这些路径不参与推理。
 
-已生成可直接上传的 `dist/casmi_formula-0.1.1-py3-none-any.whl`。云端安装：
+如果需要 wheel 分发，可在 clone 后本地构建；`dist/` 属于忽略目录，不会随 Git 提交：
 
-```bash
-python -m pip install casmi_formula-0.1.1-py3-none-any.whl
+```powershell
+python -m pip wheel . --no-deps --no-build-isolation --wheel-dir dist
+python -m pip install dist/casmi_formula-0.1.1-py3-none-any.whl
 ```
 
-安装后 `FormulaAdapter()` 即加载包内 multi；`FormulaAdapter("enveda-only")` 切换模型。
+直接执行 `python -m pip install -e . --no-deps` 也会使用源码中的随包模型；安装后
+`FormulaAdapter()` 即加载包内 multi，`FormulaAdapter("enveda-only")` 切换模型。
 wheel 包含代码与模型，不包含 Python 运行时及第三方依赖；无网络环境需另外准备
 对应平台的依赖包。若通过 Git 部署，请一起提交 `src/casmi/formula/models/` 的新增文件。
 
