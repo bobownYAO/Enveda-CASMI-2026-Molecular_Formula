@@ -3,6 +3,7 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 enveda-CASMI26-molecule-id-mass-spectra/
+# 实验产物保持忽略；部署模型位于 src/casmi/formula/models/，随源码提交。
 artifacts/
 build/
 dist/

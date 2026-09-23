@@ -1,0 +1,2 @@
+# Preserve release asset hashes across Windows/Linux checkouts.
+src/casmi/formula/models/** -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

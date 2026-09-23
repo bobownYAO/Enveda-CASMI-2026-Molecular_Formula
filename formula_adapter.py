@@ -6,8 +6,9 @@
 ----
 lightgbm_model: "multi" / "enveda-only" / 模型目录 / model.txt 的路径。
     自定义模型必须同时提供 model.txt 与 metadata.json；不接受裸 Booster，
-    因为元素边界、特征顺序及预处理配置必须与训练一致。相对模型路径以本文件
-    所在目录为基准；迁移部署时请配置模型的绝对路径，模型不打包进 Python 包。
+    因为元素边界、特征顺序及预处理配置必须与训练一致。multi/enveda-only 的
+    权重和元数据随包分发，云端无需额外配置路径。自定义相对模型路径仍以
+    本文件所在目录为基准。
 spectra: 同一分子的一张或多张谱，list[dict]。每张谱必填：
     precursor_mz: 正浮点数，前体 m/z。
     adduct: 加合物，如 "[M+H]+" 或 "[M-H]-"。
@@ -58,6 +59,7 @@ from pathlib import Path
 from typing import Any
 
 from casmi.formula import FormulaPredictor
+from casmi import formula as _formula_package
 
 
 # ==================== 日常调用只需修改此处 ====================
@@ -68,8 +70,8 @@ CONFIG = {
 }
 
 MODEL_PRESETS = {
-    "multi": "artifacts/formula/multisource-ranker-v1",
-    "enveda-only": "artifacts/formula/enveda-ranker-v1",
+    "multi": Path(_formula_package.__file__).resolve().parent / "models" / "multi",
+    "enveda-only": Path(_formula_package.__file__).resolve().parent / "models" / "enveda-only",
 }
 # =============================================================
 

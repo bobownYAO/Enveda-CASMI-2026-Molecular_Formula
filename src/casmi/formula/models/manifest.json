@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "default": "multi",
+  "models": {
+    "multi": {
+      "source_artifact": "artifacts/formula/multisource-ranker-v1",
+      "model_version": "lambdarank-8bc94941e0084a9b",
+      "best_iteration": 263,
+      "sha256": {
+        "model.txt": "8bc94941e0084a9b118e2818df7835427d6f99cfb5ebcd298c2b97adedeb4ac3",
+        "metadata.json": "83138f131a5d9c5a8531066eaae7ff1dafa1c43afd5f2afb02f041ebdff7087f"
+      }
+    },
+    "enveda-only": {
+      "source_artifact": "artifacts/formula/enveda-ranker-v1",
+      "model_version": "lambdarank-3399c797d759be5b",
+      "best_iteration": 227,
+      "sha256": {
+        "model.txt": "3399c797d759be5b20445fa060742a2192c919eb7527faf35a2d4807a6f7ca62",
+        "metadata.json": "351f2538d283ab9531c45a7c9c8447b1c06d5da81bec227f7cead04c30c5dede"
+      }
+    }
+  }
+}

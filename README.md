@@ -21,14 +21,15 @@ Linux 使用 `.venv/bin/python` 与 `.venv/bin/casmi`。需要离线安装时，
 
 如果你的目标是把 CASMI 接入另一个 Python 程序，推荐使用项目根目录的
 [`formula_adapter.py`](formula_adapter.py)。它是一个独立的本地 Python 模块入口，
-不是 HTTP 服务，也不会自动启动网络端口；调用方只需要准备模型目录并导入
+不是 HTTP 服务，也不会自动启动网络端口；调用方只需要安装项目并导入
 `FormulaAdapter`。训练、候选枚举和谱图特征细节由底层 `casmi` 包处理。
 
 ### 部署前提与模型选择
 
-Adapter 不会在推理时训练模型。模型权重不打包进 wheel，也不在 Git 的 `artifacts/`
-目录中；从远程仓库重新拉取代码后，需要另外复制模型文件，或通过绝对路径提供模型。
-每个可加载模型目录必须同时包含：
+Adapter 不会在推理时训练模型。`multi` 与 `enveda-only` 的权重和元数据位于
+`src/casmi/formula/models/`，不受 `artifacts/` 忽略规则影响，随 Git 源码、wheel 和
+源码分发包一起提供。云端安装后可以直接使用默认 multi，无需原训练数据或本地路径。
+自定义模型目录必须同时包含：
 
 ```text
 model.txt       # LightGBM 已训练权重
@@ -39,13 +40,28 @@ metadata.json   # 特征名称、化学配置、配置版本和模型版本
 
 | `lightgbm_model` | 模型目录 | 用途 |
 |---|---|---|
-| `"multi"` | `artifacts/formula/multisource-ranker-v1` | 多来源训练模型，Adapter 默认值 |
-| `"enveda-only"` | `artifacts/formula/enveda-ranker-v1` | Enveda/timsTOF 模型 |
+| `"multi"` | 包内 `casmi/formula/models/multi` | 多来源训练模型，Adapter 默认值 |
+| `"enveda-only"` | 包内 `casmi/formula/models/enveda-only` | Enveda/timsTOF 模型 |
 | 自定义字符串或 `Path` | 模型目录或其中的 `model.txt` | 部署调用方提供的模型 |
 
 自定义模型路径必须指向同时拥有 `model.txt` 和 `metadata.json` 的目录；不能只提供
 裸 LightGBM Booster。加载时会校验模型版本、特征名称、特征数量和公式配置，
 不兼容会直接抛出异常，不会静默回退到其他模型。
+
+两个模型的推理文件共约 1.84 MB，无需 Git LFS。发布清单与 SHA-256 校验值见
+[`src/casmi/formula/models/manifest.json`](src/casmi/formula/models/manifest.json)。
+原 `artifacts/` 目录仍保留本地实验产物并继续忽略；发布副本的模型权重与原权重一致，
+元数据中的本机绝对溯源路径已转为仓库相对路径，这些路径不参与推理。
+
+已生成可直接上传的 `dist/casmi_formula-0.1.1-py3-none-any.whl`。云端安装：
+
+```bash
+python -m pip install casmi_formula-0.1.1-py3-none-any.whl
+```
+
+安装后 `FormulaAdapter()` 即加载包内 multi；`FormulaAdapter("enveda-only")` 切换模型。
+wheel 包含代码与模型，不包含 Python 运行时及第三方依赖；无网络环境需另外准备
+对应平台的依赖包。若通过 Git 部署，请一起提交 `src/casmi/formula/models/` 的新增文件。
 
 ### 配置优先级
 
@@ -162,15 +178,15 @@ Parquet 必须包含 `molecule_id`；Adapter 会按该列分组，并为每个�
 `casmi.formula.FormulaPredictor`；一般业务调用不需要直接调用 `candidates`、`features`
 或训练脚本。
 
-本地工作区若已提供 Enveda/timsTOF 模型 `artifacts/formula/enveda-ranker-v1`，可直接加载；
-该目录及其他训练产物不属于代码仓库的一部分。
+原实验目录 `artifacts/formula/enveda-ranker-v1` 仍作为本地产物保留；部署时使用
+`FormulaAdapter("enveda-only")` 加载随包发布的同一组权重。
 
 ### 当前模型与效果边界
 
 使用 3,000 个结构训练、500 个结构验证；新的 500 个独立留出结构 Top-1 为 83.8%、
 Top-5 为 98.0%、MRR@25 为 0.8977。训练时未见分子式的 284 个分子 Top-1 为 76.4%。
 这是 Enveda 来源的首轮训练，尚未全量拟合，也未验证天然产物或其他仪器的同等效果。
-当前代码的 49 项回归测试已覆盖 Adapter 入口。训练协议、同候选基线对照和使用限制见
+当前代码的 51 项回归测试已覆盖 Adapter 入口及随包模型。训练协议、同候选基线对照和使用限制见
 [`docs/validation.md`](docs/validation.md)；详细报告属于本地产物，可由
 `scripts/train_enveda_ranker.py` 和 `scripts/report_enveda_ranker.py` 重新生成。
 后续已比较原模型与 7 组新参数：验证集选中的 63 叶模型在另一批 500 个新留出分子上
@@ -276,7 +292,8 @@ casmi formula predict --input enveda-CASMI26-molecule-id-mass-spectra/test.parqu
 该总分代表训练库分布，不代表竞赛自然产物分布。原模型保留，新模型可单独加载：
 
 ```python
-predictor = FormulaPredictor.load("artifacts/formula/multisource-ranker-v1")
+from formula_adapter import FormulaAdapter
+predictor = FormulaAdapter("multi")
 ```
 
 复现脚本为 `scripts/train_multisource_ranker.py` 和 `scripts/report_multisource_ranker.py`；
